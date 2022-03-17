@@ -25,6 +25,8 @@ cd build
 cmake ..
 make
 mysql -h 192.168.3.14 -u MySQLUser -p  < gas_usage.sql
+nano mkc.sh
+./mkc.sh
 ```
 
 
