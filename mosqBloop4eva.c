@@ -257,8 +257,11 @@ void local_disconnect(struct mosquitto *mosq, void *obj, int rc)
 
 void glow_disconnect(struct mosquitto *mosq, void *obj,  int rc)
 {
-	printf("Glow disconnect from glowmqtt.energyhive.com:8883 at %s\n", time_stamp);
-	printf("Return code = %d\n", rc);
+	if (rc != 0) {
+		printf("Glow disconnect from glowmqtt.energyhive.com:8883 at %s\n", time_stamp);
+		printf("Return code = %d\n", rc);
+		was_connected = rc;
+	}
 }
 
 void glow_connect(struct mosquitto *mosq, void *obj, int rc)
