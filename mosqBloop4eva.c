@@ -1,7 +1,3 @@
-/* 
- Copyright © Dougie Lawson, 2021, All rights reserved 
-*/
-
 #include <signal.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -13,17 +9,21 @@
 #include <mosquitto.h>
 #include <libconfig.h>
 
-#define CONFIG_FILE "/home/pi/.glow.cfg"
+#define CONFIG_FILE "/home/pi_d/.glow.cfg"
 
 const char* username;
 const char* password;
 const char* device;
+struct mosquitto *mosq_pub;
+const char* broker = "10.1.1.11";
+struct mosquitto *mosq_sub;
+int was_connected;
 
 json_object* json_object_parse(json_object* jObj);
 json_object* print_json_value(json_object* jObj);
 int lexer(const char *s);
 
-static int run = 1;
+//static int run = 1;
 char* current_key;
 char* unk_string;
 signed long unk_value;
@@ -48,7 +48,9 @@ enum {unk, unused, gas_mprn, gas_reading, gas_multiplier, gas_divisor, gas_daily
 
 void handle_signal(int s)
 {
-	run = 0;
+	//run = 0;
+	printf("Signal received -terminating\n");
+	exit(0);
 }
 
 
@@ -115,6 +117,7 @@ int lexer(const char *s)
 		{"ihdscreen", unused},
 		{"ihdbutton" ,unused},
 		{"ihdserverScreenId", unused},
+		{"ihdserverScreenbuttonscreenlink", unused},
      	};
 	struct entry_s *p = token_table;
 	for(; p->key != NULL && strcmp(p->key, s) != 0; ++p);
@@ -246,8 +249,9 @@ void readConfig()
 void local_disconnect(struct mosquitto *mosq, void *obj, int rc)
 {
 	if (rc != 0) {
-		printf("Local disconnect from 192.168.3.14:1883 at %s\n", time_stamp);
+		printf("Local disconnect from 10.1.1.11:1883 at %s\n", time_stamp);
 		printf("Return code = %d\n", rc);
+		was_connected = rc;
 	}
 }
 
@@ -264,12 +268,10 @@ void glow_connect(struct mosquitto *mosq, void *obj, int rc)
 
 void glow_message(struct mosquitto *mosq, void *obj, const struct mosquitto_message *message)
 {
-
-	struct mosquitto *mosq_pub;
 	int rc;
-	const char* broker = "192.168.3.14";
 	const char* gasTopic = "meterReading/out/gas";
 	const char* elecTopic = "meterReading/out/elec";
+
 	nesting = 0;
 	json_object* mqttJson = json_tokener_parse(message->payload);
 	json_object_parse(mqttJson);
@@ -285,54 +287,84 @@ void glow_message(struct mosquitto *mosq, void *obj, const struct mosquitto_mess
 	sprintf(gasMQTTmessage,
 			"{\"MPRN\":\"%s\",\"Gas_reading\": %.3f,\"Daily\": %.3f,\"Weekly\": %.3f,\"Monthly\": %.3f,\"Timestamp\": \"%s\"}",
 		      	gasMPRN, gasReading, gasDailyConsumption, gasWeeklyConsumption, gasMonthlyConsumption, time_stamp);
+	printf("%s\n", gasMQTTmessage);
 	
 	sprintf(elecMQTTmessage, "{\"Meter\": %.3f, \"Timestamp\": \"%s\"}" , elecConsumption, time_stamp);
-	
-	mosq_pub = mosquitto_new(NULL, true, NULL);
+	printf("%s\n", elecMQTTmessage);
 
-	mosquitto_disconnect_callback_set(mosq_pub, local_disconnect);
-	mosquitto_connect(mosq_pub, broker, 1883, 0);
-	mosquitto_publish(mosq_pub, NULL, gasTopic, strlen(gasMQTTmessage), gasMQTTmessage, 0, 0);
-	mosquitto_publish(mosq_pub, NULL, elecTopic, strlen(elecMQTTmessage), elecMQTTmessage, 0, 0);
-	mosquitto_disconnect(mosq_pub);
-	mosquitto_destroy(mosq_pub);
+	rc = mosquitto_publish(mosq_pub, NULL, gasTopic, strlen(gasMQTTmessage), gasMQTTmessage, 0, 0);
+	printf("pub1 rc=%d\n", rc);
+	rc= mosquitto_publish(mosq_pub, NULL, elecTopic, strlen(elecMQTTmessage), elecMQTTmessage, 0, 0);
+	printf("pub2 rc=%d\n", rc);
+
+}
+int try_Connect()
+{
+	int rc;
+	if (was_connected !=0) {
+		printf("Was connected rc=%d", was_connected);
+	       	mosquitto_disconnect(mosq_sub);
+		mosquitto_loop_stop(mosq_sub, true);
+		was_connected = 0;
+	}
+	mosquitto_connect_callback_set(mosq_sub, glow_connect);
+	mosquitto_message_callback_set(mosq_sub, glow_message);
+
+	mosquitto_username_pw_set(mosq_sub, username, password);
+	mosquitto_tls_set(mosq_sub, NULL,  "/etc/ssl/certs",  NULL, NULL, NULL);
+	mosquitto_tls_opts_set(mosq_sub, 1, NULL, NULL);
+
+	rc = mosquitto_connect(mosq_sub, "glowmqtt.energyhive.com", 8883, 30);
+	if (rc) printf("mosquitto connect, rc=%d\n", rc);
+
+	mosquitto_disconnect_callback_set(mosq_sub, glow_disconnect);
+	return rc;
 
 }
 
 int main(int argc, char* argv[]) 
 {
 	uint8_t reconnect = true;
-	struct mosquitto *mosq_sub;
 	int rc = 0;
 	char topic[23];
 	mosquitto_lib_init();
-	mosq_sub = mosquitto_new(NULL, true, 0);
+	was_connected = 0;
+	mosq_pub = mosquitto_new(NULL, true, NULL);
+	mosq_sub = mosquitto_new(NULL, true, mosq_pub);
 
 	signal(SIGINT, handle_signal);
 	signal(SIGTERM, handle_signal);
 
 	readConfig();
+	rc = mosquitto_connect(mosq_pub, broker, 1883, 60);
+	printf("mosq_pub connect rc=%d\n", rc);
+	rc = try_Connect();
+	printf("Glowmarkt connect rc=%d\n", rc);
 
 	if(mosq_sub)
 	{
-		mosquitto_connect_callback_set(mosq_sub, glow_connect);
-		mosquitto_message_callback_set(mosq_sub, glow_message);
-
-		mosquitto_username_pw_set(mosq_sub, username, password);
-		mosquitto_tls_set(mosq_sub, NULL,  "/etc/ssl/certs",  NULL, NULL, NULL);
-		mosquitto_tls_opts_set(mosq_sub, 1, NULL, NULL);
-
-		rc = mosquitto_connect(mosq_sub, "glowmqtt.energyhive.com", 8883, 30);
-		if (rc) printf("mosquitto connect, rc=%d\n", rc);
-
-		//sprintf(topic, "SMART/HILD/%s", device);
+//		sprintf(topic, "SMART/HILD/%s", device);
 		sprintf(topic, "SMART/+/%s", device);
-
-		mosquitto_disconnect_callback_set(mosq_sub, glow_disconnect);
 		mosquitto_subscribe(mosq_sub, NULL, topic, 0);
+		
+		mosquitto_loop_start(mosq_pub);
 
-		mosquitto_loop_forever(mosq_sub, -1, 1);
+//		mosquitto_loop_forever(mosq_sub, -1, 1);
+		while(reconnect)
+		{
+			rc = mosquitto_loop(mosq_sub, -1, 1);
+			if (reconnect && rc)
+			{
+				printf("Conn error\n");
+				sleep(1);
+				rc = try_Connect();
+				printf("Glowmarkt reconnect rc=%d\n",rc);
+//				mosquitto_reconnect(mosq_sub);
+				mosquitto_subscribe(mosq_sub, NULL, topic, 0);
+			}
+		}
 		mosquitto_destroy(mosq_sub);
+		mosquitto_destroy(mosq_pub);
 	}
 	mosquitto_lib_cleanup();
 }
