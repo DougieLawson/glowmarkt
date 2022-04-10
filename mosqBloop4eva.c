@@ -1,3 +1,6 @@
+/* 
+ Copyright © Dougie Lawson, 2021-2022, All rights reserved 
+*/
 #include <signal.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -9,13 +12,13 @@
 #include <mosquitto.h>
 #include <libconfig.h>
 
-#define CONFIG_FILE "/home/pi_d/.glow.cfg"
+#define CONFIG_FILE "/home/pi/.glow.cfg"
 
 const char* username;
 const char* password;
 const char* device;
 struct mosquitto *mosq_pub;
-const char* broker = "10.1.1.11";
+const char* broker = "192.168.3.14";
 struct mosquitto *mosq_sub;
 int was_connected;
 
@@ -249,7 +252,7 @@ void readConfig()
 void local_disconnect(struct mosquitto *mosq, void *obj, int rc)
 {
 	if (rc != 0) {
-		printf("Local disconnect from 10.1.1.11:1883 at %s\n", time_stamp);
+		printf("Local disconnect from 192.168.3.14:1883 at %s\n", time_stamp);
 		printf("Return code = %d\n", rc);
 		was_connected = rc;
 	}
@@ -257,11 +260,8 @@ void local_disconnect(struct mosquitto *mosq, void *obj, int rc)
 
 void glow_disconnect(struct mosquitto *mosq, void *obj,  int rc)
 {
-	if (rc != 0) {
-		printf("Glow disconnect from glowmqtt.energyhive.com:8883 at %s\n", time_stamp);
-		printf("Return code = %d\n", rc);
-		was_connected = rc;
-	}
+	printf("Glow disconnect from glowmqtt.energyhive.com:8883 at %s\n", time_stamp);
+	printf("Return code = %d\n", rc);
 }
 
 void glow_connect(struct mosquitto *mosq, void *obj, int rc)
@@ -346,13 +346,11 @@ int main(int argc, char* argv[])
 
 	if(mosq_sub)
 	{
-//		sprintf(topic, "SMART/HILD/%s", device);
 		sprintf(topic, "SMART/+/%s", device);
 		mosquitto_subscribe(mosq_sub, NULL, topic, 0);
 		
 		mosquitto_loop_start(mosq_pub);
 
-//		mosquitto_loop_forever(mosq_sub, -1, 1);
 		while(reconnect)
 		{
 			rc = mosquitto_loop(mosq_sub, -1, 1);
@@ -362,7 +360,6 @@ int main(int argc, char* argv[])
 				sleep(1);
 				rc = try_Connect();
 				printf("Glowmarkt reconnect rc=%d\n",rc);
-//				mosquitto_reconnect(mosq_sub);
 				mosquitto_subscribe(mosq_sub, NULL, topic, 0);
 			}
 		}
